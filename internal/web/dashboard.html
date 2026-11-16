@@ -234,7 +234,8 @@ const fmtK = (n)=>{
   return String(n);
 };
 
-let state = null, filter = "全部", view = (location.hash==="#conv"?"conv":"parts"), transcriptTurns = [], sessionTurns = [], openTurn = 0, selectedSession = "";
+let state = null, filter = "全部", view = (location.hash==="#conv"?"conv":"parts"), transcriptTurns = [], sessionTurns = [], openTurn = 0, selectedSession = "",
+    lastTurnsSig = "", firstTurnOpenedFor = "";
 
 async function load(){
   // populate the session switcher once (and keep the selection)
@@ -269,7 +270,12 @@ async function load(){
   try {
     const tr = await fetch("/dashboard/turns?session=" + encodeURIComponent(s.session||""));
     sessionTurns = (await tr.json()).turns || [];
-    if(sessionTurns.length && openTurn !== -2) openTurn = sessionTurns[0].index;
+    // default-open the first turn only the first time we see this session,
+    // so a poll never resets what the user opened / scrolled to
+    if(sessionTurns.length && firstTurnOpenedFor !== s.session){
+      openTurn = sessionTurns[0].index;
+      firstTurnOpenedFor = s.session;
+    }
   } catch(e){ sessionTurns = []; }
   renderHead(s); renderTree(s); renderLegend(s); renderTabs(s); renderViews();
 }
@@ -468,6 +474,11 @@ function itemHtml(t){
 function renderConv(){
   const el = $("conv");
   if(!sessionTurns.length){ el.innerHTML = `<div class="empty">没有对话内容</div>`; $("foot").textContent=""; return; }
+  // skip rebuilding when nothing changed (the 4s poll) so scrolling and the
+  // open turn are preserved instead of jumping back to the top
+  const sig = openTurn + "|" + sessionTurns.map(t => t.index + ":" + t.tokens + ":" + (t.items ? t.items.length : 0)).join(",");
+  if(sig === lastTurnsSig && el.classList.contains("drawn")) return;
+  lastTurnsSig = sig;
   // turn list, newest default collapsed; click a turn header to expand its items
   let html = `<div class="row" style="margin-bottom:6px"><span style="color:var(--muted);font-size:12px">会话内容 · 按对话轮次</span>
     <span style="flex:1"></span>
@@ -497,7 +508,18 @@ function renderConv(){
       if(ev.target.closest(".copy")) return;
       const turn = hd.parentElement; const idx = Number(turn.dataset.turn);
       openTurn = (openTurn===idx) ? -1 : idx;
+      // keep the clicked turn at the same viewport spot: expanding/collapsing
+      // changes heights above it, so remember its offset within the viewport
+      // (docY - scrollY) and restore that after re-rendering.
+      const viewportOffset = hd.getBoundingClientRect().top;   // where it sits now
+      const docBefore = window.scrollY + viewportOffset;
       renderConv();
+      const hd2 = el.querySelector(`.turn[data-turn="${idx}"] .turn-hd`);
+      if(hd2){
+        const docAfter = window.scrollY + hd2.getBoundingClientRect().top;
+        // move so hd2 sits at the same viewportOffset as before (clamped ≥0)
+        window.scrollTo(0, Math.max(0, docAfter - Math.max(viewportOffset, 0)));
+      }
     };
   });
   // copy buttons
@@ -512,6 +534,7 @@ function renderConv(){
   if(ea) ea.onclick=()=>{ openTurn = -2; el.querySelectorAll(".turn").forEach(t=>{ t.classList.add("open"); t.querySelector(".turn-body").style.display="block"; t.querySelector(".chev").textContent="▾"; }); };
   if(ca) ca.onclick=()=>{ openTurn = -1; el.querySelectorAll(".turn").forEach(t=>{ t.classList.remove("open"); t.querySelector(".turn-body").style.display="none"; t.querySelector(".chev").textContent="▸"; }); };
   $("foot").textContent = `会话共 ${sessionTurns.length} 轮 · 会话 ${esc(state.session||"")} · 点击轮次展开`;
+  el.classList.add("drawn");
 }
 
 function renderRows(s){
