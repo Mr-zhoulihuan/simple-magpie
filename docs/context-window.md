@@ -86,5 +86,6 @@ flowchart TB
   Tree --> Legend["图例: 6 分类 + 剩余空间"]
   Legend --> Tabs["内容分类 tab / 对话内容 tab"]
   Tabs --> Rows["明细表: 按分类筛选,每行一个 item + 占比"]
+  Rows --> Click["点击行 / treemap 色块 → 弹窗看该项内容(文本/文件/输出,可复制)"]
   Tabs --> Conv["对话内容: 按轮次(见 conversation.md)"]
 ```

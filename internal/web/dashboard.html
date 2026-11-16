@@ -118,6 +118,32 @@
   .it-result .it-body{color:#c9cdd4}
   .it-think .it-body{background:#1f2228;color:#9aa0aa;font-style:italic}
   .it-system .it-body{background:#22242a;color:#9298a2}
+  /* clickable rows + treemap tiles */
+  tr.row{cursor:pointer}
+  tr.row:hover{background:var(--panel2)}
+  .tile.clickable{cursor:pointer}
+  .tile.clickable:hover{opacity:.8}
+  /* modal */
+  .modal{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:flex-start;
+    justify-content:center;padding:6vh 20px;z-index:50}
+  .modal.on{display:flex}
+  .modal-panel{width:min(900px,100%);max-height:86vh;display:flex;flex-direction:column;
+    background:var(--panel);border:1px solid var(--line);border-radius:14px;overflow:hidden;
+    box-shadow:0 18px 60px rgba(0,0,0,.5)}
+  .modal-hd{display:flex;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid var(--line)}
+  .modal-hd strong{font-size:14px}
+  .modal-sub{color:var(--muted);font-size:12px}
+  .modal-hd button{background:var(--panel2);border:1px solid var(--line);color:var(--muted);
+    border-radius:7px;padding:4px 9px;cursor:pointer;font-size:13px}
+  .modal-hd button:hover{color:var(--fg);border-color:#4a4e57}
+  .modal-body{margin:0;padding:16px 18px;overflow:auto;white-space:pre-wrap;word-break:break-word;
+    font:12.5px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;color:#d6dae0}
+  .modal-foot{padding:9px 18px;border-top:1px solid var(--line);color:var(--dim);font-size:12px}
+  .pi-list{display:flex;flex-direction:column;font-family:inherit}
+  .pi-row{display:flex;align-items:center;gap:12px;padding:9px 6px;border-bottom:1px solid var(--line);cursor:pointer;border-radius:6px}
+  .pi-row:hover{background:var(--panel2)}
+  .pi-row .pi-n{flex:1;color:var(--fg);font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .pi-row .pi-t{color:var(--muted);font-variant-numeric:tabular-nums;font-size:12.5px}
 </style>
 </head>
 <body>
@@ -162,6 +188,21 @@
     <table><tbody id="rows"></tbody></table>
     <div id="conv" class="conv"></div>
     <div class="foot" id="foot"></div>
+  </div>
+</div>
+
+<div id="modal" class="modal" aria-hidden="true">
+  <div class="modal-panel">
+    <div class="modal-hd">
+      <span class="dot" id="modal-dot"></span>
+      <strong id="modal-title">—</strong>
+      <span class="modal-sub" id="modal-sub"></span>
+      <span style="flex:1"></span>
+      <button id="modal-copy" title="复制">⧉</button>
+      <button id="modal-close" title="关闭">✕</button>
+    </div>
+    <pre class="modal-body" id="modal-body"></pre>
+    <div class="modal-foot" id="modal-foot"></div>
   </div>
 </div>
 
@@ -303,7 +344,7 @@ function renderTree(s){
   for(const q of laid){
     const r = q.a, x=q.x, y=q.y, w=q.w, h=q.h;
     const col = COLOR[r.kind]||"#555";
-    el += `<g class="tile"><rect x="${x+1}" y="${y+1}" width="${Math.max(0,w-2)}" height="${Math.max(0,h-2)}" rx="3" fill="${col}22" stroke="${col}" stroke-opacity=".5"/>`;
+    el += `<g class="tile clickable" data-kind="${r.kind}"><rect x="${x+1}" y="${y+1}" width="${Math.max(0,w-2)}" height="${Math.max(0,h-2)}" rx="3" fill="${col}22" stroke="${col}" stroke-opacity=".5"/>`;
     // inner items
     const its = (r.part.items||[]).slice().sort((a,b)=>b.tokens-a.tokens);
     if(its.length && w>70 && h>44){
@@ -330,6 +371,9 @@ function renderTree(s){
     el += `<text x="${usedW+14}" y="22" fill="#8b909a" font-size="12">剩余空间 ${fmtK(free)} · ${(free/scale*100).toFixed(1)}%</text>`;
   }
   svg.innerHTML = el;
+  svg.querySelectorAll(".tile.clickable").forEach(g=>{
+    g.addEventListener("click", ()=>{ const k=g.getAttribute("data-kind"); openPart(state, k); });
+  });
 }
 
 function partTitle(part, kind){
@@ -457,19 +501,75 @@ function renderConv(){
 function renderRows(s){
   const p=s.prompt; const byKind={}; p.parts.forEach(x=>byKind[x.kind]=x);
   const kinds = filter==="全部" ? PARTS.filter(k=>byKind[k]) : PARTS.filter(k=>LABEL[k]===filter&&byKind[k]);
-  let max=1; let all=[];
+  let max=1; const all=[];
   for(const k of kinds){ for(const it of (byKind[k].items||[])){ all.push({...it,kind:k}); max=Math.max(max,it.tokens);} }
   all.sort((a,b)=>b.tokens-a.tokens);
+  window.__rows = all;
   if(!all.length){ $("rows").innerHTML=`<tr><td class="empty">没有内容</td></tr>`; return; }
-  $("rows").innerHTML = all.map(it=>{
+  $("rows").innerHTML = all.map((it,idx)=>{
     const col=COLOR[it.kind];
     const name = it.tag==="more" ? `另外 ${it.n} 项` : it.name + (it.n>1&&it.tag!=="turn"?` ×${it.n}`:"");
-    return `<tr><td class="n"><span class="dot" style="background:${col}"></span>${esc(name)}</td>
+    const has = (it.text!=null && it.text!=="");
+    return `<tr class="row" data-idx="${idx}"><td class="n"><span class="dot" style="background:${col}"></span>${esc(name)}${has?' <span style="color:#5f636d">›</span>':''}</td>
       <td style="width:45%"><div class="bar2"><i style="width:${(it.tokens/max*100).toFixed(1)}%;background:${col}"></i></div></td>
       <td class="v">${fmtK(it.tokens)}</td></tr>`;
   }).join("");
-  $("foot").textContent = `${esc(s.agent||"")} › ${esc(s.session||"")} · 共 ${p.turns} 轮 · 估算口径：ASCII≈4字符/token，CJK≈1字/token，图片≈1600`;
+  $("rows").querySelectorAll("tr.row").forEach(tr=>{
+    tr.onclick = ()=>{ const it = window.__rows[Number(tr.dataset.idx)]; openItem(it); };
+  });
+  // deep link: #item-N opens item N (and its containing category tab)
+  const mItem = /^#item-(\d+)$/.exec(location.hash||"");
+  if(mItem && all.length){ const it = all[Number(mItem[1])]; if(it) openItem(it); }
+  $("foot").textContent = `${esc(s.agent||"")} › ${esc(s.session||"")} · 共 ${p.turns} 轮 · 点击任一行查看内容 · 估算口径：ASCII≈4字符/token，CJK≈1字/token，图片≈1600`;
 }
+
+// openItem shows one item's content (or a part's item list when it has none).
+function openItem(it){
+  if(!it) return;
+  const col = COLOR[it.kind] || "#666";
+  $("modal-dot").style.background = col;
+  $("modal-title").textContent = (it.tag==="more" ? `另外 ${it.n} 项` : it.name + (it.n>1&&it.tag!=="turn"?` ×${it.n}`:"")) + "  ·  " + (LABEL[it.kind]||it.kind);
+  $("modal-sub").textContent = fmtK(it.tokens) + " token";
+  const body = it.text;
+  if(body!=null && body!==""){ showModal(body + (it.truncated?"\n\n…(内容已截断)" : "")); }
+  else { showModal("（该类为占用统计，无文本内容）"); }
+}
+
+// openPart lists a part's items; clicking one shows its content.
+function openPart(s, kind){
+  const part = s.prompt.parts.find(x=>x.kind===kind);
+  if(!part){ return; }
+  $("modal-dot").style.background = COLOR[kind]||"#666";
+  $("modal-title").textContent = LABEL[kind] + "  ·  " + part.items.length + " 项";
+  $("modal-sub").textContent = fmtK(part.tokens) + " token";
+  const list = part.items.map((it,i)=>{
+    const nm = it.tag==="more" ? `另外 ${it.n} 项` : it.name + (it.n>1&&it.tag!=="turn"?` ×${it.n}`:"");
+    return `<div class="pi-row" data-i="${i}"><span class="pi-n">${esc(nm)}</span><span class="pi-t">${fmtK(it.tokens)}</span></div>`;
+  }).join("");
+  $("modal-body").innerHTML = `<div class="pi-list">${list}</div>`;
+  $("modal-foot").textContent = "点击某项查看其内容";
+  $("modal").classList.add("on");
+  $("modal-body").querySelectorAll(".pi-row").forEach(r=>{
+    r.onclick = ()=>{ const it = part.items[Number(r.dataset.i)]; showModal(it.text!=null&&it.text!=="" ? it.text+(it.truncated?"\n\n…(内容已截断)":"") : "（无文本内容）"); };
+  });
+}
+
+function showModal(text){
+  $("modal-body").textContent = text;
+  $("modal").classList.add("on");
+}
+
+// modal controls
+(function(){
+  const close = ()=>$("modal").classList.remove("on");
+  $("modal-close").onclick = close;
+  $("modal").addEventListener("click", (e)=>{ if(e.target===$("modal")) close(); });
+  document.addEventListener("keydown", (e)=>{ if(e.key==="Escape") close(); });
+  $("modal-copy").onclick = ()=>{
+    const t = $("modal-body").innerText || "";
+    try{ navigator.clipboard.writeText(t); $("modal-copy").textContent="✓"; setTimeout(()=>$("modal-copy").textContent="⧉",900);}catch(e){}
+  };
+})();
 
 load();
 setInterval(load, 4000);

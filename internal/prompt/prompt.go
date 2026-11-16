@@ -48,7 +48,15 @@ type PromptItem struct {
 	Tag    string `json:"tag,omitempty"` // what it is: memory, read, shell, turn…
 	N      int    `json:"n,omitempty"`   // how many it gathers (bash ×31)
 	Tokens int    `json:"tokens"`
+	// Text is the item's own content, bounded (itemTextCap bytes), so the
+	// dashboard can show what an item actually held when clicked. Truncated
+	// reports it was cut.
+	Text      string `json:"text,omitempty"`
+	Truncated bool   `json:"truncated,omitempty"`
 }
+
+// itemTextCap bounds the per-item content kept for the dashboard.
+const itemTextCap = 8 * 1024
 
 // maxItems is how many items a part keeps; the rest are summed in one.
 const maxItems = 24
@@ -80,7 +88,7 @@ type builder struct {
 
 func itemKey(tag, name string) string { return tag + "\x00" + name }
 
-func (b *builder) add(kind, name, tag string, tokens int) {
+func (b *builder) add(kind, name, tag string, tokens int, text string) {
 	if tokens <= 0 {
 		return
 	}
@@ -95,9 +103,35 @@ func (b *builder) add(kind, name, tag string, tokens int) {
 		if tag != "turn" {
 			it.N++
 		}
+		it.appendText(text)
 	} else {
-		m[k] = &PromptItem{Name: name, Tag: tag, Tokens: tokens}
+		it := &PromptItem{Name: name, Tag: tag, Tokens: tokens}
+		it.appendText(text)
+		m[k] = it
 	}
+}
+
+// appendText keeps t's content bounded: the first itemTextCap bytes are kept,
+// later additions append until the cap, and Truncated is set when cut.
+func (it *PromptItem) appendText(text string) {
+	if text == "" || it.Truncated {
+		return
+	}
+	room := itemTextCap - len(it.Text)
+	if room <= 0 {
+		it.Truncated = true
+		return
+	}
+	if len(text) > room {
+		it.Text += text[:room]
+		it.Truncated = true
+		return
+	}
+	// separate successive pieces (turns, multiple bash results)
+	if it.Text != "" {
+		it.Text += "\n"
+	}
+	it.Text += text
 }
 
 // Analyze reads a request as proto and estimates its prompt's parts.
@@ -117,7 +151,7 @@ func AnalyzeRequest(req *protocol.Request) Prompt {
 	}
 	for _, t := range req.Tools {
 		def := t.Name + " " + t.Description + " " + string(t.Schema)
-		b.add(PartTools, t.Name, "", TokensOf(def))
+		b.add(PartTools, t.Name, "", TokensOf(def), def)
 	}
 	for _, m := range req.Messages {
 		userTurn := m.Role == "user" && !hasOnlyToolResults(m)
@@ -130,15 +164,15 @@ func AnalyzeRequest(req *protocol.Request) Prompt {
 				if m.Role == "system" || m.Role == "developer" {
 					classifyText(b, p.Text)
 				} else {
-					b.add(PartChat, m.Role, "turn", TokensOf(p.Text))
+					b.add(PartChat, m.Role, "turn", TokensOf(p.Text), p.Text)
 				}
 			case protocol.Thinking:
-				b.add(PartChat, "thinking", "turn", TokensOf(p.Text))
+				b.add(PartChat, "thinking", "turn", TokensOf(p.Text), p.Text)
 			case protocol.Image:
 				classifyImage(b)
 			case protocol.ToolCall:
 				name := p.Name
-				b.add(PartChat, name, "call", TokensOf(string(p.Args)))
+				b.add(PartChat, name, "call", TokensOf(string(p.Args)), string(p.Args))
 			case protocol.ToolResult:
 				name := p.Name
 				if name == "" {
@@ -148,7 +182,7 @@ func AnalyzeRequest(req *protocol.Request) Prompt {
 				if readsFile(name) {
 					kind, tag = PartFiles, "read"
 				}
-				b.add(kind, name, tag, TokensOf(p.Text))
+				b.add(kind, name, tag, TokensOf(p.Text), p.Text)
 			}
 		}
 	}
@@ -165,20 +199,20 @@ func classifyText(b *builder, text string) {
 		strings.Contains(lower, "<reminder"):
 		names := instructionNames(text)
 		if len(names) == 0 {
-			b.add(PartMemory, "instructions", "memory", TokensOf(text))
+			b.add(PartMemory, "instructions", "memory", TokensOf(text), text)
 			return
 		}
 		per := TokensOf(text) / len(names)
 		for _, n := range names {
-			b.add(PartMemory, n, "memory", per)
+			b.add(PartMemory, n, "memory", per, text)
 		}
 	default:
-		b.add(PartSystem, harnessName(text), "", TokensOf(text))
+		b.add(PartSystem, harnessName(text), "", TokensOf(text), text)
 	}
 }
 
 func classifyImage(b *builder) {
-	b.add(PartFiles, "image", "image", imageTokens)
+	b.add(PartFiles, "image", "image", imageTokens, "")
 }
 
 func (b *builder) finish() Prompt {
