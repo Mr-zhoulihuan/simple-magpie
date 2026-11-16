@@ -136,8 +136,23 @@
   .modal-hd button{background:var(--panel2);border:1px solid var(--line);color:var(--muted);
     border-radius:7px;padding:4px 9px;cursor:pointer;font-size:13px}
   .modal-hd button:hover{color:var(--fg);border-color:#4a4e57}
-  .modal-body{margin:0;padding:16px 18px;overflow:auto;white-space:pre-wrap;word-break:break-word;
-    font:12.5px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;color:#d6dae0}
+  .modal-body{margin:0;padding:16px 18px;overflow:auto;font:13px/1.7 "PingFang SC","Microsoft YaHei",ui-monospace,SFMono-Regular,Menlo,monospace;color:#d6dae0}
+  .modal-body.nowrap{white-space:pre;overflow:auto}
+  .modal-body.wrap{white-space:pre-wrap;word-break:break-word}
+  /* bracketed structure (tool descriptions often have <...> sections) */
+  .v-sec{color:#e0a72f;font-weight:600;margin:14px 0 4px}
+  .v-sec:first-child{margin-top:0}
+  .v-bullet{color:#9fb3c8;padding-left:8px}
+  .v-key{color:#7fc6ff}
+  .v-str{color:#a6e3a1}
+  .v-num{color:#f2b880}
+  .v-nil{color:#c98bd6}
+  .v-dim{color:#7d828b}
+  .v-line{display:flex}
+  .v-ln{color:#4a4e57;user-select:none;text-align:right;padding-right:12px;flex:0 0 auto}
+  .v-code{flex:1;white-space:inherit}
+  .modal-body.filetxt{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  .modal-body.prose{font-family:"PingFang SC","Microsoft YaHei",sans-serif;font-size:13.5px;line-height:1.75}
   .modal-foot{padding:9px 18px;border-top:1px solid var(--line);color:var(--dim);font-size:12px}
   .pi-list{display:flex;flex-direction:column;font-family:inherit}
   .pi-row{display:flex;align-items:center;gap:12px;padding:9px 6px;border-bottom:1px solid var(--line);cursor:pointer;border-radius:6px}
@@ -198,10 +213,11 @@
       <strong id="modal-title">—</strong>
       <span class="modal-sub" id="modal-sub"></span>
       <span style="flex:1"></span>
+      <button id="modal-wrap" title="切换自动换行">↩ 换行</button>
       <button id="modal-copy" title="复制">⧉</button>
       <button id="modal-close" title="关闭">✕</button>
     </div>
-    <pre class="modal-body" id="modal-body"></pre>
+    <div class="modal-body" id="modal-body"></div>
     <div class="modal-foot" id="modal-foot"></div>
   </div>
 </div>
@@ -530,9 +546,8 @@ function openItem(it){
   $("modal-dot").style.background = col;
   $("modal-title").textContent = (it.tag==="more" ? `另外 ${it.n} 项` : it.name + (it.n>1&&it.tag!=="turn"?` ×${it.n}`:"")) + "  ·  " + (LABEL[it.kind]||it.kind);
   $("modal-sub").textContent = fmtK(it.tokens) + " token";
-  const body = it.text;
-  if(body!=null && body!==""){ showModal(body + (it.truncated?"\n\n…(内容已截断)" : "")); }
-  else { showModal("（该类为占用统计，无文本内容）"); }
+  if(it.text!=null && it.text!==""){ showContent(it.text, it.kind, it.truncated); }
+  else { showContent("（该类为占用统计，无文本内容）", it.kind, false); }
 }
 
 // openPart lists a part's items; clicking one shows its content.
@@ -544,18 +559,86 @@ function openPart(s, kind){
   $("modal-sub").textContent = fmtK(part.tokens) + " token";
   const list = part.items.map((it,i)=>{
     const nm = it.tag==="more" ? `另外 ${it.n} 项` : it.name + (it.n>1&&it.tag!=="turn"?` ×${it.n}`:"");
-    return `<div class="pi-row" data-i="${i}"><span class="pi-n">${esc(nm)}</span><span class="pi-t">${fmtK(it.tokens)}</span></div>`;
+    const has = it.text!=null && it.text!=="";
+    return `<div class="pi-row" data-i="${i}"><span class="pi-n">${esc(nm)}${has?" ›":""}</span><span class="pi-t">${fmtK(it.tokens)}</span></div>`;
   }).join("");
-  $("modal-body").innerHTML = `<div class="pi-list">${list}</div>`;
+  const mb = $("modal-body");
+  mb.className = "modal-body wrap prose";
+  mb.innerHTML = `<div class="pi-list">${list}</div>`;
   $("modal-foot").textContent = "点击某项查看其内容";
   $("modal").classList.add("on");
-  $("modal-body").querySelectorAll(".pi-row").forEach(r=>{
-    r.onclick = ()=>{ const it = part.items[Number(r.dataset.i)]; showModal(it.text!=null&&it.text!=="" ? it.text+(it.truncated?"\n\n…(内容已截断)":"") : "（无文本内容）"); };
+  mb.querySelectorAll(".pi-row").forEach(r=>{
+    r.onclick = ()=>{ const it = part.items[Number(r.dataset.i)];
+      if(it.text!=null && it.text!=="") showContent(it.text, kind, it.truncated);
+      else showContent("（无文本内容）", kind, false); };
   });
 }
 
-function showModal(text){
-  $("modal-body").textContent = text;
+// looksJSON reports whether s is a JSON object/array worth pretty-printing.
+function looksJSON(s){
+  const t=s.trim(); if(!t) return false;
+  if(t[0]!=="{" && t[0]!=="[") return false;
+  try{ JSON.parse(t); return true; }catch(e){ return false; }
+}
+
+// highlightJSON colours a pretty-printed JSON string.
+function highlightJSON(s){
+  // escape only < & > so quotes stay matchable for tokenizing
+  const e = s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  return e
+    .replace(/("(?:\\.|[^"\\])*")(\s*:)/g,'<span class="v-key">$1</span>$2')
+    .replace(/:\s*("(?:\\.|[^"\\])*")/g,': <span class="v-str">$1</span>')
+    .replace(/:\s*(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)/g,': <span class="v-num">$1</span>')
+    .replace(/:\s*(true|false|null)\b/g,': <span class="v-nil">$1</span>');
+}
+
+// withLineNumbers renders code line by line with a gutter.
+function withLineNumbers(code){
+  const lines = code.split("\n");
+  return lines.map((ln,i)=>`<div class="v-line"><span class="v-ln">${i+1}</span><span class="v-code">${ln===""?"":esc(ln)}</span></div>`).join("");
+}
+
+// renderProse makes a tool description / instruction block readable:
+// <section> headers and "- attr: value" bullets get structure.
+function renderProse(text){
+  const lines = text.split("\n");
+  return lines.map(ln=>{
+    let esc_ = esc(ln);
+    // <xxx> section headers
+    const sec = /^\s*<([^>\s]+)>\s*$/.exec(ln);
+    if(sec){ return `<div class="v-sec">〈${esc(sec[1])}〉</div>`; }
+    // "- name: rest"  or  "- name"
+    const bul = /^(\s*)-\s+([A-Za-z_][\w.]*)\s*:?\s*(.*)$/.exec(ln);
+    if(bul){
+      const indent = bul[1].replace(/\t/g,"  ");
+      const key = esc(bul[2]); const rest = esc(bul[3]);
+      return `<div class="v-bullet">${indent}• <span class="v-key">${key}</span>${rest?": "+rest:""}</div>`;
+    }
+    if(ln.trim()==="") return '<div style="height:8px"></div>';
+    return `<div>${esc_}</div>`;
+  }).join("");
+}
+
+// showContent renders a content body by its apparent kind, clearly readable.
+function showContent(text, kind, truncated){
+  const mb = $("modal-body");
+  const note = truncated ? '<div class="v-dim" style="margin-top:12px">…(内容已截断)</div>' : "";
+  const bodyKind = kind || "";
+  if(looksJSON(text)){
+    const pretty = JSON.stringify(JSON.parse(text), null, 2);
+    mb.className = "modal-body wrap";
+    mb.innerHTML = `<div class="v-code" style="white-space:inherit">${highlightJSON(pretty)}</div>` + note;
+    $("modal-foot").textContent = "JSON · 可复制";
+  } else if(bodyKind==="tools" || bodyKind==="system" || bodyKind==="memory"){
+    mb.className = "modal-body wrap prose";
+    mb.innerHTML = renderProse(text) + note;
+    $("modal-foot").textContent = "说明文本 · 点「↩ 换行」切换换行";
+  } else {
+    // source / output: monospace + line numbers, wraps by default
+    mb.className = "modal-body wrap filetxt";
+    mb.innerHTML = withLineNumbers(text) + note;
+    $("modal-foot").textContent = "文本/源码 · 点「↩ 换行」切换";
+  }
   $("modal").classList.add("on");
 }
 
@@ -568,6 +651,13 @@ function showModal(text){
   $("modal-copy").onclick = ()=>{
     const t = $("modal-body").innerText || "";
     try{ navigator.clipboard.writeText(t); $("modal-copy").textContent="✓"; setTimeout(()=>$("modal-copy").textContent="⧉",900);}catch(e){}
+  };
+  $("modal-wrap").onclick = ()=>{
+    const mb = $("modal-body");
+    const wrap = !mb.classList.contains("nowrap");
+    mb.classList.toggle("wrap", !wrap);
+    mb.classList.toggle("nowrap", wrap);
+    $("modal-wrap").textContent = wrap ? "↪ 不换行" : "↩ 换行";
   };
 })();
 
