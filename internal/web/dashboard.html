@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>simple-magpie · 上下文窗口</title>
+<style>
+  :root{
+    --bg:#1b1d21; --panel:#24262b; --panel2:#2b2e34; --line:#34373e; --fg:#e6e8eb;
+    --muted:#8b909a; --dim:#5f636d;
+    --system:#3b82f6; --tools:#2563eb; --memory:#e0a72f; --files:#3f9d5a;
+    --results:#c2703a; --chat:#9b6fd1; --free:#303238;
+    --ok:#37c26a;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+    font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+  .wrap{max-width:1180px;margin:0 auto;padding:22px}
+  .head{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px 20px;margin-bottom:14px}
+  .row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .src{color:var(--muted);font-size:13px}
+  .badge{background:var(--panel2);border:1px solid var(--line);border-radius:999px;padding:3px 10px;font-size:12px;color:var(--muted)}
+  .badge.ok{color:var(--ok);border-color:#2c5a3f}
+  .metrics{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-top:16px}
+  .metric .lab{color:var(--muted);font-size:13px}
+  .metric .big{font-size:30px;font-weight:650;letter-spacing:.3px}
+  .metric .big .unit{font-size:16px;color:var(--muted);font-weight:400}
+  .metric .sub{color:var(--muted);font-size:12.5px;margin-top:2px}
+  .bar{height:7px;border-radius:5px;background:var(--panel2);overflow:hidden;margin-top:8px}
+  .bar > i{display:block;height:100%;border-radius:5px}
+  .cache-bar > i{background:linear-gradient(90deg,#2f9e5a,#46d07a)}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px 18px;margin-bottom:14px}
+  svg{display:block;width:100%;height:auto}
+  .legend{display:flex;flex-wrap:wrap;align-items:center;gap:6px 16px;margin-top:12px;
+    border-top:1px solid var(--line);padding-top:12px;font-size:12.5px;color:var(--muted)}
+  .legend .k{display:inline-flex;align-items:center;gap:6px}
+  .legend .sw{width:9px;height:9px;border-radius:2px;display:inline-block}
+  .tabs{display:flex;gap:6px;flex-wrap:wrap}
+  .tab{background:var(--panel2);border:1px solid var(--line);color:var(--muted);border-radius:8px;
+    padding:5px 12px;font-size:12.5px;cursor:pointer}
+  .tab.on{color:var(--fg);border-color:#4a4e57;background:#30343b}
+  table{width:100%;border-collapse:collapse;margin-top:12px}
+  td{padding:8px 6px;border-bottom:1px solid var(--line);font-size:13px;vertical-align:middle}
+  td.n{color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:360px}
+  td.v{text-align:right;color:var(--muted);width:70px;font-variant-numeric:tabular-nums}
+  .bar2{height:6px;border-radius:4px;background:var(--panel2);overflow:hidden;min-width:120px}
+  .bar2 > i{display:block;height:100%}
+  .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:8px;vertical-align:middle}
+  .tile:hover{opacity:.85;cursor:default}
+  .empty{color:var(--muted);padding:30px;text-align:center}
+  .foot{color:var(--dim);font-size:12px;margin-top:10px}
+  code{background:var(--panel2);padding:1px 6px;border-radius:5px;font-size:12px}
+  /* conversation view */
+  .conv{display:none;margin-top:12px}
+  .conv.on{display:block}
+  .msg{display:grid;grid-template-columns:64px 1fr;gap:10px;padding:10px 0;border-bottom:1px solid var(--line)}
+  .msg .who{font-size:12px;font-weight:600;color:var(--muted);padding-top:2px}
+  .msg.user .who{color:#5aa9ff}
+  .msg.assistant .who{color:#c69bf0}
+  .msg.system .who{color:#8b909a}
+  .msg.tool .who{color:#e0a72f}
+  .bubble{white-space:pre-wrap;word-break:break-word;font-size:13px;line-height:1.5;
+    background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:9px 12px;max-width:100%}
+  .msg.user .bubble{background:#1e2a3a;border-color:#2b3f57}
+  .msg.assistant .bubble{background:#2a2236;border-color:#3c2f50}
+  .msg.system .bubble{background:#22242a;color:#9298a2}
+  .tool-call{border-color:#5a4326!important;background:#2a2319!important}
+  .tool-call .hd{color:#e0a72f;font-weight:600;font-size:12.5px;margin-bottom:4px}
+  .tool-call pre{margin:0;white-space:pre-wrap;word-break:break-word;color:#d8c39a;font-size:12px}
+  .tool-result .hd{color:#c2703a;font-weight:600;font-size:12.5px;margin-bottom:4px}
+  .badge-trunc{color:#e0a72f;font-size:11px;margin-left:6px}
+  .thinking .bubble{background:#1f2228;color:#9aa0aa;font-style:italic}
+  .sel{background:var(--panel2);border:1px solid var(--line);color:var(--fg);border-radius:8px;
+    padding:4px 8px;font-size:12.5px;max-width:340px;cursor:pointer}
+  /* date groups */
+  .day{display:flex;align-items:center;gap:10px;margin:18px 0 4px;color:var(--muted);font-size:12px}
+  .day:first-child{margin-top:6px}
+  .day .line{flex:1;height:1px;background:var(--line)}
+  .day .d{background:var(--panel2);border:1px solid var(--line);border-radius:999px;padding:2px 10px}
+  /* collapsible message */
+  .msg .bubble{position:relative;transition:max-height .12s ease}
+  .msg.collapsed .bubble{max-height:132px;overflow:hidden}
+  .msg.collapsed .bubble::after{content:"";position:absolute;left:0;right:0;bottom:0;height:40px;
+    background:linear-gradient(transparent,var(--panel2));pointer-events:none;border-radius:0 0 10px 10px}
+  .msg.user.collapsed .bubble::after{background:linear-gradient(transparent,#1e2a3a)}
+  .msg.assistant.collapsed .bubble::after{background:linear-gradient(transparent,#2a2236)}
+  .msg-tools{display:flex;gap:8px;margin-top:6px}
+  .msg-tools button{background:var(--panel2);border:1px solid var(--line);color:var(--muted);
+    border-radius:6px;padding:2px 8px;font-size:11.5px;cursor:pointer}
+  .msg-tools button:hover{color:var(--fg)}
+  .msg.hidden-role{display:none}
+  /* per-turn conversation (magpie style) */
+  .turn{border-bottom:1px solid var(--line)}
+  .turn-hd{display:flex;align-items:center;gap:10px;padding:12px 4px;cursor:pointer;user-select:none;font-size:13px}
+  .turn-hd:hover{background:var(--panel2);border-radius:8px}
+  .turn .chev{color:var(--muted);width:12px}
+  .turn-t{font-weight:600}
+  .turn-time{color:var(--dim);font-size:11.5px}
+  .turn-tok{color:var(--muted);font-variant-numeric:tabular-nums}
+  .turn-body{padding:4px 0 16px 22px}
+  .it{margin:10px 0}
+  .it-hd{display:flex;align-items:center;gap:8px;margin-bottom:4px}
+  .it-lab{font-size:11.5px;color:var(--muted)}
+  .it-user .it-lab{color:#5aa9ff}
+  .it-assistant .it-lab{color:#c69bf0}
+  .it-call .it-lab{color:#e0a72f}
+  .it-result .it-lab{color:#c2703a}
+  .it-think .it-lab{color:#9aa0aa;font-style:italic}
+  .copy{margin-left:auto;background:transparent;border:1px solid var(--line);color:var(--dim);
+    border-radius:6px;width:24px;height:22px;cursor:pointer;font-size:12px;line-height:1}
+  .copy:hover{color:var(--fg);border-color:#4a4e57}
+  .it-body{margin:0;white-space:pre-wrap;word-break:break-word;font-size:12.5px;line-height:1.5;
+    background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:9px 12px;
+    font-family:-apple-system,"PingFang SC","Microsoft YaHei",monospace;max-height:420px;overflow:auto}
+  .it-user .it-body{background:#1e2a3a;border-color:#2b3f57}
+  .it-assistant .it-body{background:#2a2236;border-color:#3c2f50}
+  .it-call .it-body{background:#2a2319;border-color:#5a4326;color:#d8c39a}
+  .it-result .it-body{color:#c9cdd4}
+  .it-think .it-body{background:#1f2228;color:#9aa0aa;font-style:italic}
+  .it-system .it-body{background:#22242a;color:#9298a2}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="head">
+    <div class="row">
+      <strong>上下文窗口</strong>
+      <span id="src" class="src"></span>
+      <select id="sessionsel" class="sel" title="切换会话"></select>
+      <span style="flex:1"></span>
+      <span id="health" class="badge">已计数</span>
+      <span id="counted" class="badge">载入中…</span>
+    </div>
+    <div class="metrics">
+      <div class="metric">
+        <div class="lab">已用上下文</div>
+        <div class="big"><span id="used">—</span> <span class="unit">/ <span id="window">—</span> token</span></div>
+        <div class="sub" id="usedSub"></div>
+      </div>
+      <div class="metric">
+        <div class="lab">提示词缓存</div>
+        <div class="big"><span id="cachePct">—</span><span class="unit" id="cacheW"> 命中</span></div>
+        <div class="bar cache-bar"><i id="cacheBar" style="width:0"></i></div>
+        <div class="sub" id="cacheSub"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <svg id="treemap" viewBox="0 0 1100 260" preserveAspectRatio="xMidYMid meet"></svg>
+    <div class="legend" id="legend"></div>
+  </div>
+
+  <div class="card">
+    <div class="row" style="justify-content:space-between">
+      <div class="tabs" id="viewtabs">
+        <span class="tab on" data-v="parts">内容分类</span>
+        <span class="tab" data-v="conv">对话内容</span>
+      </div>
+      <div class="tabs" id="tabs"></div>
+    </div>
+    <table><tbody id="rows"></tbody></table>
+    <div id="conv" class="conv"></div>
+    <div class="foot" id="foot"></div>
+  </div>
+</div>
+
+<script>
+const PARTS = ["system","tools","memory","files","results","chat"];
+const LABEL = {system:"系统提示词",tools:"工具",memory:"记忆",files:"文件",results:"工具结果",chat:"会话内容"};
+const COLOR = {system:"#3b82f6",tools:"#2563eb",memory:"#e0a72f",files:"#3f9d5a",results:"#c2703a",chat:"#9b6fd1"};
+const $ = (id)=>document.getElementById(id);
+const fmtK = (n)=>{
+  if(n==null) return "—";
+  if(n>=1e6) return (n/1e6).toFixed(2).replace(/\.?0+$/,"")+"M";
+  if(n>=1000) return (n/1000).toFixed(1).replace(/\.0$/,"")+"K";
+  return String(n);
+};
+
+let state = null, filter = "全部", view = (location.hash==="#conv"?"conv":"parts"), transcriptTurns = [], sessionTurns = [], openTurn = 0, selectedSession = "";
+
+async function load(){
+  // populate the session switcher once (and keep the selection)
+  try {
+    const sr = await fetch("/dashboard/sessions");
+    const list = (await sr.json()).sessions || [];
+    const sel = $("sessionsel");
+    if (list.length && sel.options.length !== list.length) {
+      const keep = selectedSession;
+      sel.innerHTML = list.map(x =>
+        `<option value="${esc(x.session)}">${esc(x.agent||"?")} · ${esc(x.model||"")} · ${x.requests} req</option>`).join("");
+      if (keep) sel.value = keep;
+      selectedSession = sel.value;
+      sel.onchange = () => { selectedSession = sel.value; view="conv"; renderViews(); load(); };
+    } else if (list.length) {
+      // keep options fresh but preserve selection
+      if (selectedSession) sel.value = selectedSession;
+    }
+  } catch(e){}
+  const url = selectedSession ? "/dashboard/session?session=" + encodeURIComponent(selectedSession) : "/dashboard/session";
+  const r = await fetch(url);
+  const s = await r.json();
+  if(s.empty){
+    $("src").textContent = "暂无记录 —— 让一个 Agent 通过本网关发一次请求";
+    $("treemap").innerHTML = `<text x="20" y="40" fill="#8b909a">还没有请求。把 base_url 指向本网关试一次。</text>`;
+    $("tabs").innerHTML = ""; $("rows").innerHTML = "";
+    return;
+  }
+  state = s;
+  if (!selectedSession) selectedSession = s.session;
+  // fetch the conversation for the same session, as per-turn items
+  try {
+    const tr = await fetch("/dashboard/turns?session=" + encodeURIComponent(s.session||""));
+    sessionTurns = (await tr.json()).turns || [];
+    if(sessionTurns.length && openTurn !== -2) openTurn = sessionTurns[0].index;
+  } catch(e){ sessionTurns = []; }
+  renderHead(s); renderTree(s); renderLegend(s); renderTabs(s); renderViews();
+}
+
+function renderHead(s){
+  const used = s.prompt.tokens, win = s.window || 200000;
+  $("used").textContent = fmtK(used);
+  $("window").textContent = fmtK(win);
+  const pct = win>0 ? (used/win*100) : 0;
+  const free = Math.max(0, win-used);
+  $("usedSub").textContent = `已用 ${pct.toFixed(pct<10?1:0)}% · 约还能容纳 ${s.headroom>=999?"很多":s.headroom} 个请求`;
+  $("src").innerHTML = `${esc(s.agent||"?")} · <span style="color:#9aa0aa">${esc(s.model||"")}</span>`;
+  $("counted").textContent = `${s.turns} 轮 · ${s.requests} 请求`;
+  $("health").textContent = s.prompt.counted ? "已计数" : "估算";
+  $("health").className = "badge" + (s.prompt.counted ? " ok" : "");
+
+  const u = s.usage || {};
+  const total = (u.Input||0)+(u.CacheRead||0)+(u.CacheWrite||0);
+  const hit = total>0 ? (u.CacheRead/total*100) : 0;
+  $("cachePct").textContent = (total>0 ? hit.toFixed(0) : "—") + (total>0?"%":"");
+  $("cacheBar").style.width = (total>0? hit:0) + "%";
+  $("cacheSub").textContent = total>0
+    ? `${fmtK(u.CacheRead)} 来自缓存 · ${fmtK(u.Input)} 新增`
+    : "厂商未报告缓存";
+}
+
+function esc(s){return String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));}
+
+// ---- squarified treemap ----
+function squarify(items, x, y, w, h){
+  const out = [];
+  const total = items.reduce((s,a)=>s+a.v,0) || 1;
+  let rest = items.slice(), cx=x, cy=y, cw=w, ch=h, rem=total;
+  while(rest.length){
+    const row=[];
+    const side = Math.min(cw,ch);
+    let best=Infinity;
+    while(rest.length){
+      const cand = row.concat(rest[0]);
+      const worst = worstRatio(cand, side, rem, cw*ch);
+      if(worst<=best){ row.push(rest.shift()); best=worst; } else break;
+    }
+    // lay row along the shorter side
+    const rowSum = row.reduce((s,a)=>s+a.v,0);
+    const frac = rowSum/rem;
+    if(cw>=ch){
+      const rw = frac*cw;
+      let oy=cy;
+      for(const it of row){ const rh=(it.v/rowSum)*ch; out.push({a:it,x:cx,y:oy,w:rw,h:rh}); oy+=rh; }
+      cx+=rw; cw-=rw;
+    } else {
+      const rh = frac*ch;
+      let ox=cx;
+      for(const it of row){ const rw=(it.v/rowSum)*cw; out.push({a:it,x:ox,y:cy,w:rw,h:rh}); ox+=rw; }
+      cy+=rh; ch-=rh;
+    }
+    rem-=rowSum;
+    if(rem<=0) break;
+  }
+  return out;
+}
+function worstRatio(row, side, rem, area){
+  const s = row.reduce((a,b)=>a+b.v,0);
+  if(s<=0||side<=0) return Infinity;
+  const r = s/rem*area, rw = r/side, rh = s/ rw;
+  let worst=0;
+  for(const it of row){
+    const a = (it.v/s)*r, w2 = side, h2 = a/w2;
+    worst=Math.max(worst, Math.max(w2/h2, h2/w2));
+  }
+  return worst;
+}
+
+function renderTree(s){
+  const W=1100,H=260, p=s.prompt, win=s.window||200000;
+  const scale = Math.max(win, p.tokens, 1);
+  // used share on a gentle curve so small slices stay visible
+  const usedFrac = p.tokens<scale ? Math.max(Math.pow(p.tokens/scale,0.35), 0.04) : 1;
+  const usedW = Math.round(W*usedFrac);
+  const svg = $("treemap");
+  let defs = `<defs><pattern id="hatch" width="8" height="8" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
+      <rect width="8" height="8" fill="#2a2c31"/><line x1="0" y1="0" x2="0" y2="8" stroke="#33363c" stroke-width="3"/></pattern></defs>`;
+  let el = defs;
+
+  const parts = PARTS.map(k=>p.parts.find(x=>x.kind===k)).filter(x=>x&&x.tokens>0);
+  const items = parts.map(x=>({v:x.tokens,kind:x.kind,part:x}));
+  const laid = squarify(items, 0,0, usedW, H);
+  for(const q of laid){
+    const r = q.a, x=q.x, y=q.y, w=q.w, h=q.h;
+    const col = COLOR[r.kind]||"#555";
+    el += `<g class="tile"><rect x="${x+1}" y="${y+1}" width="${Math.max(0,w-2)}" height="${Math.max(0,h-2)}" rx="3" fill="${col}22" stroke="${col}" stroke-opacity=".5"/>`;
+    // inner items
+    const its = (r.part.items||[]).slice().sort((a,b)=>b.tokens-a.tokens);
+    if(its.length && w>70 && h>44){
+      const iv = its.map(it=>({v:it.tokens,it}));
+      const sub = squarify(iv, x+1, y+1, Math.max(0,w-2), Math.max(0,h-2));
+      for(const ss of sub){
+        const sw=ss.w, sh=ss.h, sx=ss.x, sy=ss.y;
+        if(sw<26||sh<18) continue;
+        el += `<rect x="${sx+0.5}" y="${sy+0.5}" width="${Math.max(0,sw-1)}" height="${Math.max(0,sh-1)}" rx="2" fill="${col}3a"/>`;
+      }
+    }
+    if(w>54 && h>26){
+      const name = partTitle(r.part, r.kind);
+      const tok = fmtK(r.part.tokens);
+      el += `<text x="${x+7}" y="${y+16}" fill="#dfe3e8" font-size="11.5" font-weight="600">${esc(tok)} · ${esc(LABEL[r.kind])}</text>`;
+      el += `<text x="${x+7}" y="${y+30}" fill="#a9aeb7" font-size="10.5">${esc(name)}</text>`;
+    }
+    el += `</g>`;
+  }
+  // free space
+  if(p.tokens<scale && usedW<W){
+    el += `<rect x="${usedW}" y="0" width="${W-usedW}" height="${H}" fill="url(#hatch)"/>`;
+    const free=scale-p.tokens;
+    el += `<text x="${usedW+14}" y="22" fill="#8b909a" font-size="12">剩余空间 ${fmtK(free)} · ${(free/scale*100).toFixed(1)}%</text>`;
+  }
+  svg.innerHTML = el;
+}
+
+function partTitle(part, kind){
+  if(!part.items||!part.items.length) return LABEL[kind];
+  const top = part.items[0];
+  return top.name + (top.n>1?` ×${top.n}`:"");
+}
+
+function renderLegend(s){
+  const p = s.prompt, win=s.window||200000;
+  const byKind = {}; p.parts.forEach(x=>byKind[x.kind]=x.tokens);
+  let html = "";
+  for(const k of PARTS){
+    html += `<span class="k"><span class="sw" style="background:${COLOR[k]}"></span>${LABEL[k]} <span style="color:#c7ccd3">${fmtK(byKind[k]||0)}</span></span>`;
+  }
+  html += `<span class="k" style="margin-left:auto"><span class="sw" style="background:repeating-linear-gradient(45deg,#3a3d43,#3a3d43 2px,#2a2c31 2px,#2a2c31 4px)"></span>剩余空间 <span style="color:#c7ccd3">${fmtK(Math.max(0,win-p.tokens))}</span></span>`;
+  $("legend").innerHTML = html;
+}
+
+function renderTabs(){
+  const tabs = ["全部",...PARTS.map(k=>LABEL[k])];
+  $("tabs").innerHTML = tabs.map(t=>`<span class="tab${t===filter?" on":""}" data-t="${t}">${t}</span>`).join("");
+  $("tabs").querySelectorAll(".tab").forEach(el=>{
+    el.onclick=()=>{ filter=el.dataset.t; renderTabs(); renderRows(state); };
+  });
+}
+
+function renderViews(){
+  $("viewtabs").querySelectorAll(".tab").forEach(el=>{
+    el.classList.toggle("on", el.dataset.v===view);
+    el.onclick=()=>{ view=el.dataset.v; renderViews(); renderRows(state); };
+  });
+  const isConv = view==="conv";
+  $("tabs").style.display = isConv ? "none" : "";
+  document.querySelector("table").style.display = isConv ? "none" : "";
+  $("conv").classList.toggle("on", isConv);
+  if(isConv) renderConv();
+  else renderRows(state);
+}
+
+const ROLE_NAME = {user:"用户", assistant:"助手", system:"系统", tool:"工具"};
+function dayOf(iso){
+  if(!iso) return "未知日期";
+  const d = new Date(iso);
+  if(isNaN(d)) return "未知日期";
+  const today = new Date();
+  const ymd = (x)=>x.getFullYear()+"-"+String(x.getMonth()+1).padStart(2,"0")+"-"+String(x.getDate()).padStart(2,"0");
+  if(ymd(d)===ymd(today)) return "今天 · "+ymd(d);
+  const y = new Date(today); y.setDate(y.getDate()-1);
+  if(ymd(d)===ymd(y)) return "昨天 · "+ymd(d);
+  return ymd(d);
+}
+function hhmm(iso){ if(!iso) return ""; const d=new Date(iso); if(isNaN(d)) return "";
+  return String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0"); }
+function prettyJSON(s){
+  try { return JSON.stringify(JSON.parse(s), null, 2); } catch(e){ return s || ""; }
+}
+
+// itemHtml is one block of a turn, as magpie shows it: a muted role label, the
+// content, and a copy button. type drives the label and colour.
+function itemHtml(t){
+  let label, cls, body;
+  if(t.kind==="tool_call"){ label = "工具调用 " + (t.name||""); cls="it-call"; body = prettyJSON(t.args); }
+  else if(t.kind==="tool_result"){ label = "工具结果"; cls="it-result"; body = t.text || ""; }
+  else if(t.kind==="thinking"){ label = "思考"; cls="it-think"; body = t.text || ""; }
+  else if(t.role==="user"){ label = "你"; cls="it-user"; body = t.text || ""; }
+  else if(t.role==="system"){ label = "系统"; cls="it-system"; body = t.text || ""; }
+  else { label = "助手"; cls="it-assistant"; body = t.text || ""; }
+  const trunc = t.trunc ? '<span class="badge-trunc">(已截断)</span>' : "";
+  return `<div class="it ${cls}">
+    <div class="it-hd"><span class="it-lab">${esc(label)}</span>
+      <button class="copy" title="复制" data-copy="${esc(body).replace(/"/g,"&quot;")}">⧉</button></div>
+    <pre class="it-body">${esc(body)}${trunc}</pre></div>`;
+}
+
+function renderConv(){
+  const el = $("conv");
+  if(!sessionTurns.length){ el.innerHTML = `<div class="empty">没有对话内容</div>`; $("foot").textContent=""; return; }
+  // turn list, newest default collapsed; click a turn header to expand its items
+  let html = `<div class="row" style="margin-bottom:6px"><span style="color:var(--muted);font-size:12px">会话内容 · 按对话轮次</span>
+    <span style="flex:1"></span>
+    <div class="msg-tools"><button id="expandall">全部展开</button><button id="collapseall">全部折叠</button></div></div>`;
+  let curDay = null;
+  for(const turn of sessionTurns){
+    const d = dayOf(turn.time);
+    if(d !== curDay){ curDay = d; html += `<div class="day"><span class="line"></span><span class="d">${esc(d)}</span><span class="line"></span></div>`; }
+    const isOpen = openTurn === turn.index;
+    html += `<div class="turn${isOpen?" open":""}" data-turn="${turn.index}">
+      <div class="turn-hd">
+        <span class="chev">${isOpen?"▾":"▸"}</span>
+        <span class="turn-t">第 ${turn.index} 轮</span>
+        <span class="turn-time">${hhmm(turn.time)}</span>
+        <span style="flex:1"></span>
+        <span class="turn-tok">${fmtK(turn.tokens)}</span>
+      </div>
+      <div class="turn-body" style="display:${isOpen?"block":"none"}">
+        ${turn.items.map(itemHtml).join("")}
+      </div>
+    </div>`;
+  }
+  el.innerHTML = html;
+  // click a turn header to toggle
+  el.querySelectorAll(".turn-hd").forEach(hd=>{
+    hd.onclick = (ev) => {
+      if(ev.target.closest(".copy")) return;
+      const turn = hd.parentElement; const idx = Number(turn.dataset.turn);
+      openTurn = (openTurn===idx) ? -1 : idx;
+      renderConv();
+    };
+  });
+  // copy buttons
+  el.querySelectorAll(".copy").forEach(b=>{
+    b.onclick = (ev) => {
+      ev.stopPropagation();
+      const txt = b.getAttribute("data-copy") || "";
+      try { navigator.clipboard.writeText(txt); b.textContent="✓"; setTimeout(()=>b.textContent="⧉",900); } catch(e){}
+    };
+  });
+  const ea=$("expandall"), ca=$("collapseall");
+  if(ea) ea.onclick=()=>{ openTurn = -2; el.querySelectorAll(".turn").forEach(t=>{ t.classList.add("open"); t.querySelector(".turn-body").style.display="block"; t.querySelector(".chev").textContent="▾"; }); };
+  if(ca) ca.onclick=()=>{ openTurn = -1; el.querySelectorAll(".turn").forEach(t=>{ t.classList.remove("open"); t.querySelector(".turn-body").style.display="none"; t.querySelector(".chev").textContent="▸"; }); };
+  $("foot").textContent = `会话共 ${sessionTurns.length} 轮 · 会话 ${esc(state.session||"")} · 点击轮次展开`;
+}
+
+function renderRows(s){
+  const p=s.prompt; const byKind={}; p.parts.forEach(x=>byKind[x.kind]=x);
+  const kinds = filter==="全部" ? PARTS.filter(k=>byKind[k]) : PARTS.filter(k=>LABEL[k]===filter&&byKind[k]);
+  let max=1; let all=[];
+  for(const k of kinds){ for(const it of (byKind[k].items||[])){ all.push({...it,kind:k}); max=Math.max(max,it.tokens);} }
+  all.sort((a,b)=>b.tokens-a.tokens);
+  if(!all.length){ $("rows").innerHTML=`<tr><td class="empty">没有内容</td></tr>`; return; }
+  $("rows").innerHTML = all.map(it=>{
+    const col=COLOR[it.kind];
+    const name = it.tag==="more" ? `另外 ${it.n} 项` : it.name + (it.n>1&&it.tag!=="turn"?` ×${it.n}`:"");
+    return `<tr><td class="n"><span class="dot" style="background:${col}"></span>${esc(name)}</td>
+      <td style="width:45%"><div class="bar2"><i style="width:${(it.tokens/max*100).toFixed(1)}%;background:${col}"></i></div></td>
+      <td class="v">${fmtK(it.tokens)}</td></tr>`;
+  }).join("");
+  $("foot").textContent = `${esc(s.agent||"")} › ${esc(s.session||"")} · 共 ${p.turns} 轮 · 估算口径：ASCII≈4字符/token，CJK≈1字/token，图片≈1600`;
+}
+
+load();
+setInterval(load, 4000);
+</script>
+</body>
+</html>

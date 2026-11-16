@@ -1,0 +1,15 @@
+{
+  "listen": "0.0.0.0:8080",
+  "affinity": "auto",
+  "providers": [
+    {
+      "id": "magpie",
+      "name": "magpie-upstream",
+      "base_url": "http://127.0.0.1:3425",
+      "protocols": ["chat"],
+      "default_model": "deepseek/deepseek-flash",
+      "accounts": [{ "name": "main", "key": "magpie" }]
+    }
+  ],
+  "groups": []
+}

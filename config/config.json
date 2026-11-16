@@ -1,0 +1,49 @@
+{
+  "listen": "127.0.0.1:3425",
+  "default_model": "deepseek/deepseek-chat",
+  "affinity": "auto",
+  "providers": [
+    {
+      "id": "deepseek",
+      "name": "DeepSeek",
+      "base_url": "https://api.deepseek.com",
+      "protocols": ["chat"],
+      "default_model": "deepseek-chat",
+      "accounts": [
+        { "name": "main", "key": "sk-your-deepseek-key" }
+      ]
+    },
+    {
+      "id": "anthropic",
+      "name": "Anthropic",
+      "base_url": "https://api.anthropic.com",
+      "protocols": ["anthropic"],
+      "default_model": "claude-sonnet-4-5",
+      "accounts": [
+        { "name": "main", "key": "sk-ant-your-key" }
+      ]
+    },
+    {
+      "id": "openai",
+      "name": "OpenAI",
+      "base_url": "https://api.openai.com",
+      "protocols": ["chat", "responses"],
+      "default_model": "gpt-4.1-mini",
+      "accounts": [
+        { "name": "main", "key": "sk-your-openai-key" }
+      ]
+    }
+  ],
+  "groups": [
+    {
+      "id": "daily-coding",
+      "name": "Daily coding",
+      "strategy": "order",
+      "members": [
+        { "provider": "deepseek", "model": "deepseek-chat" },
+        { "provider": "anthropic", "model": "claude-sonnet-4-5" },
+        { "provider": "openai", "model": "gpt-4.1-mini" }
+      ]
+    }
+  ]
+}
