@@ -53,6 +53,14 @@
   /* conversation view */
   .conv{display:none;margin-top:12px}
   .conv.on{display:block}
+  .conv-head{display:flex;align-items:center;gap:8px;padding:9px 12px;margin-bottom:10px;
+    background:var(--panel2);border:1px solid var(--line);border-radius:10px;font-size:12.5px;color:var(--muted)}
+  .conv-head .ch-dot{width:8px;height:8px;border-radius:50%;background:#3f9d5a}
+  .conv-head .ch-agent{color:#e6e8eb;font-weight:600}
+  .conv-head .ch-model{color:#9aa0aa}
+  .conv-head .ch-sep{color:#4a4e57}
+  .conv-head .ch-sess b{color:#e6e8eb;font-weight:600}
+  .conv-head .ch-meta{color:var(--muted)}
   .msg{display:grid;grid-template-columns:64px 1fr;gap:10px;padding:10px 0;border-bottom:1px solid var(--line)}
   .msg .who{font-size:12px;font-weight:600;color:var(--muted);padding-top:2px}
   .msg.user .who{color:#5aa9ff}
@@ -235,7 +243,7 @@ const fmtK = (n)=>{
 };
 
 let state = null, filter = "全部", view = (location.hash==="#conv"?"conv":"parts"), transcriptTurns = [], sessionTurns = [], openTurn = 0, selectedSession = "",
-    lastTurnsSig = "", firstTurnOpenedFor = "";
+    lastTurnsSig = "", firstTurnOpenedFor = "", sessionsSig = "";
 
 async function load(){
   // populate the session switcher once (and keep the selection)
@@ -243,17 +251,17 @@ async function load(){
     const sr = await fetch("/dashboard/sessions");
     const list = (await sr.json()).sessions || [];
     const sel = $("sessionsel");
-    if (list.length && sel.options.length !== list.length) {
-      const keep = selectedSession;
+    // signature of the session set + labels: rebuild whenever anything changes
+    const sig = list.map(x => x.session + ":" + x.requests + ":" + (x.time||"")).join("|");
+    if (list.length && sig !== sessionsSig) {
+      sessionsSig = sig;
       sel.innerHTML = list.map(x =>
-        `<option value="${esc(x.session)}">${esc(x.agent||"?")} · ${esc(x.model||"")} · ${x.requests} req</option>`).join("");
-      if (keep) sel.value = keep;
-      selectedSession = sel.value;
-      sel.onchange = () => { selectedSession = sel.value; view="conv"; renderViews(); load(); };
-    } else if (list.length) {
-      // keep options fresh but preserve selection
-      if (selectedSession) sel.value = selectedSession;
+        `<option value="${esc(x.session)}">${esc(sessLabel(x))}</option>`).join("");
+      // find the option for the current selection, else the first (most recent)
+      if (selectedSession && list.some(x => x.session === selectedSession)) sel.value = selectedSession;
+      else selectedSession = sel.value;
     }
+    sel.onchange = () => { selectedSession = sel.value; view="conv"; renderViews(); load(); };
   } catch(e){}
   const url = selectedSession ? "/dashboard/session?session=" + encodeURIComponent(selectedSession) : "/dashboard/session";
   const r = await fetch(url);
@@ -450,6 +458,16 @@ function dayOf(iso){
 }
 function hhmm(iso){ if(!iso) return ""; const d=new Date(iso); if(isNaN(d)) return "";
   return String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0"); }
+// shortId is a readable tail of a session id (UUIDs are long and identical-looking)
+function shortId(id){
+  if(!id) return "(无会话)";
+  if(id.length<=16) return id;
+  return "…"+id.slice(-8);
+}
+function sessLabel(x){
+  const t = x.time ? hhmm(x.time) : "";
+  return `${x.agent||"?"} · ${shortId(x.session)} · ${x.requests}请求${t?" · "+t:""}`;
+}
 function prettyJSON(s){
   try { return JSON.stringify(JSON.parse(s), null, 2); } catch(e){ return s || ""; }
 }
@@ -480,9 +498,21 @@ function renderConv(){
   if(sig === lastTurnsSig && el.classList.contains("drawn")) return;
   lastTurnsSig = sig;
   // turn list, newest default collapsed; click a turn header to expand its items
-  let html = `<div class="row" style="margin-bottom:6px"><span style="color:var(--muted);font-size:12px">会话内容 · 按对话轮次</span>
-    <span style="flex:1"></span>
-    <div class="msg-tools"><button id="expandall">全部展开</button><button id="collapseall">全部折叠</button></div></div>`;
+  const sess = state ? state.session : "";
+  const cur = sessionTurns[sessionTurns.length-1] || {};
+  const lastTime = cur.time ? hhmm(cur.time) : "";
+  let html = `<div class="conv-head">
+      <span class="ch-dot"></span>
+      <span class="ch-agent">${esc(state.agent||"pi")}</span>
+      <span class="ch-sep">/</span>
+      <span class="ch-model">${esc(state.model||"")}</span>
+      <span class="ch-sep">·</span>
+      <span class="ch-sess">会话 <b>${esc(shortId(sess))}</b></span>
+      <span class="ch-sep">·</span>
+      <span class="ch-meta">${sessionTurns.length} 轮${lastTime?" · 最后 "+lastTime:""}</span>
+      <span style="flex:1"></span>
+      <div class="msg-tools"><button id="expandall">全部展开</button><button id="collapseall">全部折叠</button></div>
+    </div>`;
   let curDay = null;
   for(const turn of sessionTurns){
     const d = dayOf(turn.time);
@@ -533,7 +563,7 @@ function renderConv(){
   const ea=$("expandall"), ca=$("collapseall");
   if(ea) ea.onclick=()=>{ openTurn = -2; el.querySelectorAll(".turn").forEach(t=>{ t.classList.add("open"); t.querySelector(".turn-body").style.display="block"; t.querySelector(".chev").textContent="▾"; }); };
   if(ca) ca.onclick=()=>{ openTurn = -1; el.querySelectorAll(".turn").forEach(t=>{ t.classList.remove("open"); t.querySelector(".turn-body").style.display="none"; t.querySelector(".chev").textContent="▸"; }); };
-  $("foot").textContent = `会话共 ${sessionTurns.length} 轮 · 会话 ${esc(state.session||"")} · 点击轮次展开`;
+  $("foot").textContent = `点击任一轮次展开/折叠内容`;
   el.classList.add("drawn");
 }
 

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"time"
 
 	"simple-magpie/internal/prompt"
 	"simple-magpie/internal/store"
@@ -90,9 +91,14 @@ func (s *Server) sessions(w http.ResponseWriter, r *http.Request) {
 	list := s.store.Sessions()
 	out := make([]map[string]any, 0, len(list))
 	for _, sess := range list {
+		var last time.Time
+		if sess.Current != nil {
+			last = sess.Current.Time
+		}
 		out = append(out, map[string]any{
 			"session": sess.Session, "agent": sess.Agent, "model": sess.Model,
 			"requests": sess.Requests, "window": sess.Window, "tokens": sess.Current.Prompt.Tokens,
+			"time": last,
 		})
 	}
 	writeJSON(w, 200, map[string]any{"sessions": out})
