@@ -1,11 +1,26 @@
 # simple-magpie
 
+[简体中文](README.md) · [English](README.en.md)
+
 一个用 Go 从零实现的**简化版 magpie**:本地 LLM 网关 + 上下文窗口仪表盘。
 
 - **多协议网关**:同时服务 OpenAI Chat、OpenAI Responses、Anthropic Messages、Gemini 四种 API。
 - **协议互转**:经统一中间表示 (IR) 在不同协议间转换,让任意 Agent 用任意 provider。
 - **路由 + 故障转移**:provider/账号池、路由组 (`group/<id>`)、策略 (order/rotate/usage/weighted)、账号冷却、会话亲缘 (prompt cache)。
 - **上下文窗口仪表盘**:树状矩形 (treemap)、缓存命中、剩余请求估算、按分类明细 —— 复刻 magpie 的「上下文窗口」页。
+
+
+## 界面预览
+
+| 上下文窗口(树状矩形 + 缓存 + 分类) | 对话内容(按轮次 / 日期 / 折叠) |
+| --- | --- |
+| ![dashboard](docs/readme-dashboard.png) | ![conversation](docs/readme-conversation.png) |
+
+点击分类项查看真实内容,自动按类型排版:
+
+| 源码 / 工具输出(带行号) | JSON(tool_call 参数,高亮) |
+| --- | --- |
+| ![content-code](docs/readme-content-code.png) | ![content-json](docs/readme-content-json.png) |
 
 ## 目录结构
 
