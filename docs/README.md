@@ -6,6 +6,7 @@
 | --- | --- |
 | [architecture.md](architecture.md) | 总体架构:分层、包职责、完整请求数据流 |
 | [request-flow.md](request-flow.md) | 一次请求从进来到返回的完整时序(含 relay / translate / 故障转移) |
+| [communication.md](communication.md) | **通讯流程图**:HTTP/SSE 线级交换、Header 变换、流式中转与重编码 |
 | [protocol-ir.md](protocol-ir.md) | 统一中间表示 (IR) 与四协议互转原理 |
 | [routing.md](routing.md) | 路由与故障转移:候选规划、策略、账号冷却、会话亲缘 |
 | [context-window.md](context-window.md) | 上下文窗口仪表盘:prompt 解剖、token 估算、treemap、headroom |
