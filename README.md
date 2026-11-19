@@ -42,6 +42,127 @@ simple-magpie/
     └── web/                    仪表盘(dashboard.html 内嵌)
 ```
 
+## 架构总览
+
+一个单二进制进程:左边接 Agent 的四种协议,右边连 Provider,中间是「选路 → 转发/翻译 → 记录」的编排,旁路是只读的仪表盘。
+
+### 分层架构
+
+```mermaid
+flowchart TB
+  subgraph Clients["客户端 Agents"]
+    CC["Claude Code<br/>Anthropic"]
+    CX["Codex<br/>Responses"]
+    GC["Gemini CLI<br/>Gemini"]
+    PI["pi / OpenCode<br/>Chat"]
+  end
+
+  subgraph Proc["simple-magpie 单进程 (:3425)"]
+    direction TB
+    MUX["http.ServeMux<br/>cmd/simple-magpie"]
+    subgraph GW["internal/gateway 编排"]
+      H["handle()<br/>解析 model / session"]
+      T["tryOne()<br/>单次尝试"]
+      RL["relay / relaySSE<br/>同协议原样转发"]
+      TR["translateReply<br/>跨协议重编码"]
+    end
+    subgraph Cap["能力层"]
+      RT["routing.Plan<br/>候选链 · 亲和 · 冷却"]
+      PR["protocol<br/>IR + 四协议 parse/build"]
+      PA["prompt.Analyze<br/>prompt 解剖"]
+      TB["transcript<br/>对话转写"]
+    end
+    ST[("store<br/>最近 500 条记录 + 会话序列")]
+    WB["web<br/>/dashboard + JSON API"]
+  end
+
+  subgraph Up["上游 Providers"]
+    DS["DeepSeek"]
+    AN["Anthropic"]
+    OA["OpenAI"]
+    MG["另一个 magpie"]
+  end
+
+  CC -->|"POST /v1/messages"| MUX
+  CX -->|"POST /v1/responses"| MUX
+  GC -->|"POST /v1beta/models/*"| MUX
+  PI -->|"POST /v1/chat/completions"| MUX
+  MUX -->|"/v1/* · /messages · /responses · /v1beta/*"| H
+  MUX -->|"/dashboard*"| WB
+  H --> PA
+  H --> TB
+  H --> RT
+  H --> T
+  T --> RL
+  T --> TR
+  RL --> PR
+  TR --> PR
+  T -->|"换头 · 换模型 · 换 URL"| DS
+  T --> AN
+  T --> OA
+  T --> MG
+  H --> ST
+  ST -.->|"只读"| WB
+  WB -.->|"浏览器轮询 JSON"| BR["浏览器 /dashboard"]
+```
+
+### 一次请求的生命周期
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant A as Agent
+  participant G as gateway.handle
+  participant R as routing.Plan
+  participant T as tryOne
+  participant U as 上游 Provider
+  participant S as store
+
+  A->>G: POST /v1/... (body)
+  G->>G: Detect(path) → from,解析 model / session
+  G->>G: prompt.Analyze + transcript.FromRequest(只留本轮新增)
+  G->>R: Plan(model, session)
+  R-->>G: 候选链 (provider / model / account × N)
+  loop 按顺序尝试,直到成功或不可重试
+    G->>T: tryOne(from, provider, candidate)
+    alt provider 支持 from 协议
+      T->>U: relay 原样转发
+    else provider 不支持
+      T->>T: Parse(from) → IR → Build(to)
+      T->>U: 发送转换后的 body
+    end
+    U-->>T: 2xx,或 429 / 402 / 5xx
+    Note over T: 可重试失败 → Rest(账号, 30s) 再换下一个候选
+  end
+  G->>G: usage → Calibrate(prompt) → AppendReply(本轮回复)
+  G->>S: Add(record)
+  Note over S: 浏览器随后轮询 /dashboard/* 读取
+```
+
+### 包依赖(单向,无环)
+
+```mermaid
+flowchart LR
+  main["cmd/simple-magpie"] --> gw["gateway"]
+  main --> web["web"]
+  gw --> routing["routing"]
+  gw --> proto["protocol"]
+  gw --> prompt["prompt"]
+  gw --> transcript["transcript"]
+  gw --> store["store"]
+  gw --> config["config"]
+  web --> store
+  store --> prompt
+  store --> transcript
+  prompt --> proto
+  transcript --> proto
+  routing --> config
+```
+
+- `protocol` 只管 IR 与四协议,不依赖任何内部包;
+- `gateway` 是唯一的编排层,汇集路由、协议、解剖、转写、存储;
+- `web` 只读 `store`,与网关解耦(同进程内共享内存)。
+
 ## 快速开始
 
 ```bash
@@ -139,10 +260,41 @@ export GEMINI_BASE_URL=http://127.0.0.1:3425
 
 这样 N 种协议只需 N 个解析器 + N 个渲染器,而不是 N² 条转换路径。
 
+```mermaid
+flowchart LR
+  CH["Chat body"] -->|"parseChat"| IR
+  AN["Anthropic body"] -->|"parseAnthropic"| IR
+  RS["Responses body"] -->|"parseResponses"| IR
+  GM["Gemini body"] -->|"parseGemini"| IR
+  IR["统一 IR<br/>Request: System / Messages / Tools<br/>Message: Role + Parts<br/>Part: text / image / tool_call / tool_result / thinking"]
+  IR -->|"buildChat"| CH2["Chat body"]
+  IR -->|"buildAnthropic"| AN2["Anthropic body"]
+  IR -->|"buildResponses"| RS2["Responses body"]
+  IR -->|"buildGemini"| GM2["Gemini body"]
+```
+
+回复侧同理:上游回复先 `gatherReply` 归一到 `Reply{Text, Thinking, Calls, Usage}`,
+再由 `renderReply` 渲染成客户端协议;流式则 `writeTranslatedStream` 生成目标协议的 SSE 事件。
+
 ### 2. relay vs translate
 
 - provider 支持 Agent 的协议 → **relay** 原样转发(保留厂商私有字段),SSE 边收边转。
 - provider 不支持 → **translate** 走 IR 转换。当前实现把上游回复聚合后一次性渲染(正确优先);生产版可按事件流式重编码。
+
+```mermaid
+flowchart TB
+  In(["tryOne(from, provider, candidate)"]) --> Sp{"provider.Speaks(from)?"}
+  Sp -->|"是"| R["relay: body 原样,仅改写 model"]
+  Sp -->|"否"| T["translate: Parse(from) → IR → Build(to)"]
+  R --> Up["POST 上游 (换头 · 换模型 · 换 URL)"]
+  T --> Up
+  Up --> St{"上游 status"}
+  St -->|"2xx"| Ok["写回客户端<br/>relay: SSE 边收边 flush<br/>translate: gatherReply → renderReply"]
+  St -->|"429 / 402 / 5xx"| Next["Rest(账号, 30s)<br/>此时还没写任何字节 → 换个候选"]
+  St -->|"其它 4xx"| Pass["原样透传厂商错误体"]
+  Ok --> Rec["读 usage / 回复 → 写入记录"]
+  Next --> In
+```
 
 ### 3. 路由与故障转移
 
@@ -150,6 +302,33 @@ export GEMINI_BASE_URL=http://127.0.0.1:3425
 - 路由组按策略展开为各成员的 (provider, model, account);
 - 会话亲缘让同一对话优先回到上次回答的账号(保住 prompt cache);
 - 每个候选失败(429/402/5xx)时休息该账号并尝试下一个,直到有结果或耗尽。
+
+```mermaid
+flowchart LR
+  M["请求 model"] --> Q{"哪种形式?"}
+  Q -->|"group/ID"| G["按策略展开每个 member"]
+  Q -->|"provider/model"| P["该 provider 的各账号"]
+  Q -->|"裸模型名"| B["default_model 命中的 provider"]
+  G --> O["排序: 亲和账号置顶<br/>冷却中账号置底<br/>再套策略 order / rotate / usage / weighted"]
+  P --> O
+  B --> O
+  O --> C["候选链 (每项 = provider + model + account)"]
+```
+
+失败重试的状态机:
+
+```mermaid
+stateDiagram-v2
+  [*] --> Try
+  Try --> Done: 2xx 成功
+  Try --> Retry: 429 / 402 / 5xx / 网络错误
+  Try --> Fatal: 其它 4xx
+  Retry --> Try: 还有候选(先 Rest 该账号)
+  Retry --> Fail: 候选耗尽
+  Done --> [*]: 记录 Tried
+  Fatal --> [*]: 错误原样返回
+  Fail --> [*]: 502
+```
 
 ### 4. prompt 解剖 (仪表盘数据)
 
@@ -164,6 +343,24 @@ export GEMINI_BASE_URL=http://127.0.0.1:3425
 token 估算:`ASCII ≈ 4 字符/token`,`CJK ≈ 1 字/token`,图片 ≈ 1600。拿到厂商 `usage` 后按真实总量**等比校准**并标记 `counted`。
 
 `Headroom()` 用相邻轮次增量的**中位数**估算还能容纳多少请求(避免单次超大输出拉偏)。
+
+### 5. 记录与仪表盘(观测链路)
+
+网关边服务边把每个请求「解剖」成结构化记录,仪表盘只读这些记录 —— 与转发路径完全解耦:
+
+```mermaid
+flowchart LR
+  Req["请求 IR"] --> PA["prompt.Analyze<br/>6 类组成 + token 估算"]
+  Req --> TB["transcript.FromRequest<br/>与上轮 diff,只留新增"]
+  Rep["上游回复"] --> TB
+  Rep --> Cal["Calibrate(usage)<br/>等比缩放到真实总量"]
+  PA --> Cal
+  Cal --> Rec[("store.Record<br/>最近 500 条")]
+  TB --> Rec
+  Rec --> Ses["store.Session / Turns<br/>series · free · headroom"]
+  Ses --> API["/dashboard/session · turns · sessions"]
+  API --> UI["treemap / 对话轮次 / 缓存命中 / 还能容纳 N"]
+```
 
 ## 用 pi 测试(provider 名 `zlh-simple-magpie`)
 
